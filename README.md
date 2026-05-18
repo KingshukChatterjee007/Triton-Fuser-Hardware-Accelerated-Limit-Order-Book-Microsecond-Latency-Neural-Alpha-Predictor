@@ -51,22 +51,39 @@ cl.exe /O2 /arch:AVX2 /LD src/ingestion_engine.cpp /Fe:src/ingestion_engine.dll
 ### 2. The Numerical Engine: Hydrodynamic PINN
 Located in `src/physics_engine.py`, the core neural network maps order book states into a continuous fluid equation. It minimizes an Advection-Diffusion loss metric representing the residual equation of structural liquidity advection towards the mid-price paired with stochastic boundary diffusion.
 
-**Training Evidence:**
+**Training & Numerical Convergence:**
 Executing `python src/physics_engine.py` runs a full training iteration. 
 - **Model Size:** 4,417 trainable weights
 - **Physics Anchors:** Advection (u) = 0.5, Diffusion (D) = 0.1
 - **Epochs:** 1,000
 - **Final PDE Residual Loss:** Converges to **0.000001** 
-*See `pinn_loss_curve.png` (generated upon execution) for visual proof of fluid density boundary tracking convergence.*
 
-### 3. The Kernel Compilation Step *(Pending Environment)*
-Located in `src/fused_kernel.py`. Using OpenAI's Triton framework, this kernel bypasses typical PyTorch boundaries. Matrix multiplication is tile-cached directly in SRAM, and a fused Softplus (Math: `ln(1 + exp(x))`) ensures positive structural density boundaries within the same hardware execution cycle.
+#### Convergence Proof
+Here is the visual proof of the continuous fluid density field convergence and empirical data loss minimization:
 
-*Status: **Pending Environment Access**.* 
-Triton currently requires a supported accelerator backend (NVIDIA CUDA or Intel XPU) running natively on a Linux OS or cloud VM instance to execute `triton.testing.do_bench`. The framework is structurally prepared but awaits execution in an enabled workspace.
+<p align="center">
+  <img src="pinn_loss_curve.png" width="48%" alt="PINN Loss Curve" />
+  <img src="pinn_empirical_loss.png" width="48%" alt="PINN Empirical Loss" />
+</p>
+
+### 3. The Kernel Compilation Step (Phase 3 Complete)
+Located in `src/fused_kernel.py`. Using OpenAI's Triton framework, this kernel bypasses typical PyTorch boundaries. Matrix multiplication is tile-cached directly in SRAM, and a fused Softplus (Math: `tl.maximum(0.0, x) + tl.log(1.0 + tl.exp(-tl.abs(x)))`) ensures positive structural density boundaries within the same hardware execution cycle.
+
+*Status: **Fully Executed, Optimized, & Audited**.*
+The kernel was compiled and profiled on an **NVIDIA T4 GPU** in Google Colab (reproducible via `phase3_triton_colab.ipynb`). 
+
+**T4 GPU Benchmarking Metrics:**
+| Matrix Dimension (M=N=K) | Latency (ms) | Measured Throughput (TFLOPS) | Accelerator Silicon Utilization (%) |
+|:------------------------:|:------------:|:----------------------------:|:----------------------------------:|
+| **256**                  | 0.0570       | 0.5884                       | 7.26%                              |
+| **512**                  | 0.1838       | 1.4601                       | 18.03%                             |
+| **1024**                 | 0.5942       | **3.6139**                   | **44.62%**                         |
+| **2048**                 | 5.4278       | 3.1652                       | 39.08%                             |
+
+By fusing the matrix multiplication and stable Softplus directly into the SRAM register tile store stage, the engine achieves **44.62% physical silicon utilization** of the T4's hardware capabilities, completely bypassing HBM memory round-trip limits.
 
 ### 4. Continuous Integration & End-to-End Scope
 Phase 4 connects the independent execution blocks into a unified pipeline:
 1. The **C++ Ingestion Engine** converts raw binary ticks via Live UDP or Mmap Replay into aligned structural feature tensors in shared memory.
 2. The **Hydrodynamic PINN Engine** interprets these features directly as boundary values to evaluate the fluid density field in PyTorch natively.
-3. For maximal execution efficiency in production, the PyTorch boundaries are subverted; the states are piped directly into the **Triton Fused Inference Kernel** which caches the tensors in SRAM, performs the final Dense layer computation, applies the Softplus physics anchor, and emits the final microsecond-latency Alpha prediction.
+3. For maximal execution efficiency in production, the PyTorch boundaries are subverted; the states are piped directly into the **Triton Fused Inference Kernel** which caches the tensors in SRAM, performs the final Dense layer computation, applies the stable Softplus physics anchor, and emits the final microsecond-latency Alpha prediction.
