@@ -23,7 +23,7 @@ def run_end_to_end_pipeline():
     print("[Ingestion] Loading L2 tick snapshots via C++ AVX2 Engine...")
     max_snapshots = 100
     n_bins = 100
-    bin_width = 1000
+    bin_width = 'adaptive'
     ticks_per_snapshot = 20
 
     # Hot-path Zero-Copy Ingestion (using dynamic platform detection)

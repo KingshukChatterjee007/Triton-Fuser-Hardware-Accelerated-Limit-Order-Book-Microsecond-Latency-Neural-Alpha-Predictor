@@ -92,7 +92,7 @@ def run_multi_stock_audit():
         # Ingest using C++ engine
         max_snapshots = 300
         n_bins = 100
-        bin_width = 1
+        bin_width = 'adaptive'
         ticks_per_snapshot = 20
         
         empirical_data = bridge.run_ingestion(
@@ -103,6 +103,11 @@ def run_multi_stock_audit():
             ticks_per_snapshot=ticks_per_snapshot
         )
         
+        if empirical_data is None:
+            print(f"[Liquidity Fail] Skipping audit for {symbol} due to excessive order book sparsity (Engine Disarmed).")
+            continue
+            
+        actual_bin_width = getattr(empirical_data, 'bin_width', 1)
         total_snapshots = empirical_data.shape[0] // n_bins
         
         # 3. Simulate Ledger with Strict Risk Controls
@@ -116,7 +121,7 @@ def run_multi_stock_audit():
         execution_delay = 1
         
         # RISK MANAGEMENT CONTROLS
-        max_position_pct = 0.15   # Position Sizing Cap: Max 15% of cash
+        base_position_pct = 0.15   # Base Position Sizing Cap: Max 15% of cash
         min_vol_gate = 0.02       # Volatility Gate
         
         equity_curve = []
@@ -132,7 +137,7 @@ def run_multi_stock_audit():
             snap_density = empirical_data[start_row:end_row, 2].numpy()
             
             centroid = np.dot(np.arange(n_bins), snap_density) / (np.sum(snap_density) + 1e-6)
-            price = config['price'] + (centroid - 50.0) * bin_width
+            price = config['price'] + (centroid - 50.0) * actual_bin_width
             mid_prices.append(price)
             
             if i >= 1:
@@ -164,7 +169,12 @@ def run_multi_stock_audit():
                     signal = 1
                 elif indicator < -threshold:
                     signal = -1
-                
+            # Step 4: Volatility-Scaled Exposure (Adaptive Position Sizing)
+            # If rolling velocity standard deviation is high (meaning high-vol sand book regime),
+            # scale down exposure from the base 15% to manage downside drawdowns.
+            vol_scalar = min_vol_gate / max(min_vol_gate, vel_std) if vel_std > 0 else 1.0
+            max_position_pct = base_position_pct * vol_scalar
+                    
             if signal == 1 and position <= 0:
                 if position < 0:
                     cash -= abs(position) * future_price_exec * (1 + fee_rate)

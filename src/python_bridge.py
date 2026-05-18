@@ -28,13 +28,28 @@ class FusedEngineBridge:
         ]
         self.lib.process_empirical_data.restype = ctypes.c_int
 
-    def run_ingestion(self, tick_file, n_bins=100, bin_width=1000, max_snapshots=1000, ticks_per_snapshot=20, silent=False):
-        # We need the mid_price to anchor the bins. Let's read the very first tick from the binary file.
+    def run_ingestion(self, tick_file, n_bins=100, bin_width='adaptive', max_snapshots=1000, ticks_per_snapshot=20, silent=False, sparsity_gate=0.15):
+        # Read the tick binary contents
         with open(tick_file, 'rb') as f:
-            first_tick = f.read(8)
-            if not first_tick:
-                raise ValueError("Tick file is empty.")
-            mid_price = struct.unpack('ii', first_tick)[0]
+            ticks_data = f.read()
+            
+        if not ticks_data:
+            raise ValueError("Tick file is empty.")
+            
+        num_ticks = len(ticks_data) // 8
+        mid_price = struct.unpack('ii', ticks_data[:8])[0]
+        
+        # ── ADAPTIVE BIN WIDTH REGIME ──
+        if bin_width == 'adaptive':
+            spreads = []
+            for i in range(min(200, num_ticks)):
+                price, vol = struct.unpack('ii', ticks_data[i*8 : i*8 + 8])
+                spreads.append(abs(price - mid_price))
+            avg_spread = np.mean(spreads) if spreads else 1.0
+            # Scale bin width relative to rolling spread depth (1/10th of avg spread)
+            bin_width = max(1, int(avg_spread * 0.1))
+            if not silent:
+                print(f"[Regime Adaptive] Calculated dynamic bin width: {bin_width} based on average spread: {avg_spread:.2f}")
             
         b_filename = tick_file.encode('utf-8')
         
@@ -60,12 +75,23 @@ class FusedEngineBridge:
             print(f"Extracted {num_snapshots} spatial density snapshots.")
         
         if num_snapshots == 0:
-            return None, None
+            return None
             
-        # Convert to numpy and then to PyTorch triplets (x_normalized, t, rho)
+        # Convert to numpy and then to PyTorch triplets
         raw_array = np.frombuffer(snapshot_buffer, dtype=np.float32).copy()
         raw_array = raw_array.reshape((max_snapshots, n_bins))
         valid_snapshots = raw_array[:num_snapshots]
+        
+        # ── LIQUIDITY / SPARSITY REGIME FILTER ──
+        total_elements = valid_snapshots.size
+        if total_elements > 0:
+            non_zero_pct = np.count_nonzero(valid_snapshots) / total_elements
+            if not silent:
+                print(f"[Liquidity Gate] Order book density is {non_zero_pct*100:.2f}% non-zero bins.")
+            if non_zero_pct < sparsity_gate:
+                if not silent:
+                    print(f"[Liquidity Gate] WARNING: Asset is too sparse ({non_zero_pct*100:.2f}% non-zero). Disarming engine to prevent fee churn.")
+                return None
         
         empirical_data = []
         
@@ -82,13 +108,15 @@ class FusedEngineBridge:
                 empirical_data.append([x_norm, t_norm, rho])
                 
         # Return as tensor (no autograd tracking needed on inputs)
-        return torch.tensor(empirical_data, dtype=torch.float32)
+        t = torch.tensor(empirical_data, dtype=torch.float32)
+        t.bin_width = bin_width
+        return t
 
 if __name__ == "__main__":
     print("Testing Python-C++ Empirical Density Bridge...")
     bridge = FusedEngineBridge()
     try:
-        tensor_data = bridge.run_ingestion("binance_real_ticks.bin", n_bins=100, bin_width=1000, ticks_per_snapshot=20)
+        tensor_data = bridge.run_ingestion("binance_real_ticks.bin", n_bins=100, bin_width='adaptive', ticks_per_snapshot=20)
         if tensor_data is not None:
             print("\nSuccessfully routed empirical density field to PyTorch tensor:")
             print(f"Shape: {tensor_data.shape} (N points x [x_norm, t_norm, rho])")
