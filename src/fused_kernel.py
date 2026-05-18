@@ -45,8 +45,8 @@ def fused_physics_alpha_kernel(
     accumulator = accumulator + bias
 
     # ── FUSED ACTIVATION: Continuous Softplus Physics Anchor ──
-    # Math: ln(1 + exp(x)) to enforce strict structural positivity of liquidity bounds
-    accumulator = tl.log(1.0 + tl.exp(accumulator))
+    # Math: stable ln(1 + exp(x)) = max(0, x) + ln(1 + exp(-|x|)) to prevent overflow to infinity
+    accumulator = tl.maximum(0.0, accumulator) + tl.log(1.0 + tl.exp(-tl.abs(accumulator)))
 
     # Determine outbound destination pointers
     out_ptrs = Out_ptr + (offs_m[:, None] * stride_om + offs_n[None, :] * stride_on)
