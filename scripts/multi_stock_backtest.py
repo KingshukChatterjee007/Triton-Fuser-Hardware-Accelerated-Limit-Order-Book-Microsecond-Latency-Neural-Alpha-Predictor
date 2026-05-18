@@ -71,10 +71,14 @@ def run_multi_stock_audit():
         'AMZN': {'price': 185, 'vol': 1.8, 'regime': 'whipsaw_noise', 'desc': 'High-Vol Whipsaw (Trend Trap)'}
     }
 
-    plt.figure(figsize=(14, 7))
+    # Prepare directories
+    os.makedirs('src/images', exist_ok=True)
+
+    fig_combined, ax_combined = plt.subplots(figsize=(14, 7))
     colors = {'NVDA': '#10b981', 'TSLA': '#3b82f6', 'AAPL': '#8b5cf6', 'MSFT': '#f59e0b', 'AMZN': '#ef4444'}
     
-    bridge = FusedEngineBridge("src/ingestion_engine.dll")
+    # Dynamic dynamic library path detection
+    bridge = FusedEngineBridge()
     
     results = {}
     
@@ -101,7 +105,7 @@ def run_multi_stock_audit():
         
         total_snapshots = empirical_data.shape[0] // n_bins
         
-        # 3. Simulate Ledger with Strict Risk Controls (The Upgraded Ledger!)
+        # 3. Simulate Ledger with Strict Risk Controls
         initial_capital = 1000000.0
         position = 0.0
         cash = initial_capital
@@ -111,9 +115,9 @@ def run_multi_stock_audit():
         slippage_ticks = 0.1
         execution_delay = 1
         
-        # --- NEW RISK MANAGEMENT CONTROLS ---
-        max_position_pct = 0.15   # 1. Position Sizing Cap: Max 15% of cash allocated to any single trade (prevents AAPL blowup!)
-        min_vol_gate = 0.02       # 2. Volatility Gate: Do not trade if fluid standard deviation is below this (prevents MSFT churning!)
+        # RISK MANAGEMENT CONTROLS
+        max_position_pct = 0.15   # Position Sizing Cap: Max 15% of cash
+        min_vol_gate = 0.02       # Volatility Gate
         
         equity_curve = []
         benchmark_curve = []
@@ -151,7 +155,7 @@ def run_multi_stock_audit():
             
             indicator = fluid_velocities[t]
             
-            # Risk Gate 2: Shutoff trading completely if market volatility is too low (saves MSFT!)
+            # Risk Gate 2: Shutoff trading if market volatility is too low
             if vel_std < min_vol_gate:
                 signal = 0
             else:
@@ -166,8 +170,6 @@ def run_multi_stock_audit():
                     cash -= abs(position) * future_price_exec * (1 + fee_rate)
                     position = 0.0
                 exec_p = future_price_exec * (1 + fee_rate) + slippage_ticks
-                
-                # Apply Dynamic Position Limit: allocate max_position_pct of cash
                 allocated = cash * max_position_pct
                 position_units = allocated / exec_p
                 cash -= position_units * exec_p
@@ -180,8 +182,6 @@ def run_multi_stock_audit():
                     cash += position * exec_p
                     position = 0.0
                 exec_p = future_price_exec * (1 - fee_rate) - slippage_ticks
-                
-                # Apply Dynamic Position Limit: allocate max_position_pct of cash
                 allocated = cash * max_position_pct
                 position_units = -allocated / exec_p
                 cash += abs(position_units) * exec_p
@@ -201,7 +201,8 @@ def run_multi_stock_audit():
         
         # Sharpe
         pct_ret = np.diff(equity_curve) / equity_curve[:-1]
-        sharpe = np.mean(pct_ret) / (np.std(pct_ret) + 1e-9) * np.sqrt(252 * 1000)
+        # Honest Sharpe ratio (annualized assuming standard 252 trading days to prevent inflation)
+        sharpe = np.mean(pct_ret) / (np.std(pct_ret) + 1e-9) * np.sqrt(252)
         
         # Max Drawdown
         peak = np.maximum.accumulate(equity_curve)
@@ -223,12 +224,30 @@ def run_multi_stock_audit():
         except:
             pass
             
-        # Plot this stock's performance curve
+        # Plot in combined figure
+        ax_combined.plot((equity_curve - initial_capital) / initial_capital * 100, 
+                         label=f"{symbol} Alpha ({config['regime']}): {final_return:+.2f}%", 
+                         color=colors[symbol], linewidth=2.5)
+        ax_combined.plot((benchmark_curve - initial_capital) / initial_capital * 100, 
+                         color=colors[symbol], linestyle='--', alpha=0.3, linewidth=1)
+
+        # GENERATE AND SAVE INDIVIDUAL STOCK GRAPH
+        plt.figure(figsize=(10, 5))
         plt.plot((equity_curve - initial_capital) / initial_capital * 100, 
-                 label=f"{symbol} Alpha ({config['regime']}): {final_return:+.2f}%", 
-                 color=colors[symbol], linewidth=2.5)
+                 label=f'Triton Fuser (Return: {final_return:+.2f}%)', color=colors[symbol], linewidth=2.5)
         plt.plot((benchmark_curve - initial_capital) / initial_capital * 100, 
-                 color=colors[symbol], linestyle='--', alpha=0.3, linewidth=1)
+                 label=f'Benchmark (Return: {bench_return:+.2f}%)', color='#6b7280', linestyle='--', linewidth=1.5)
+        plt.title(f'{symbol} Performance Audit ({config["desc"]} - {config["regime"]})', fontsize=12, fontweight='bold', pad=12)
+        plt.xlabel('HFT Steps', fontsize=10)
+        plt.ylabel('Return (%)', fontsize=10)
+        plt.grid(True, linestyle=':', alpha=0.6)
+        plt.legend(fontsize=10, loc='upper left')
+        
+        indiv_save_path = f"src/images/backtest_{symbol}.png"
+        plt.tight_layout()
+        plt.savefig(indiv_save_path, dpi=200)
+        plt.close()
+        print(f"[Graphics] Saved individual plot for {symbol} to '{indiv_save_path}'")
 
     print("\n" + "="*80)
     print("UPGRADED RISK-MANAGED PORTFOLIO AUDIT REPORT")
@@ -240,30 +259,18 @@ def run_multi_stock_audit():
         print(f"{symbol:<8} | {stocks[symbol]['regime']:<18} | {r['return']:+.2f}% | {r['bench']:+.2f}% | {r['alpha']:+.2f}% | {r['sharpe']:.2f} | {r['max_dd']:.2f}% | {r['trades']:<6}")
     print("="*80)
 
-    # Dynamic Evaluation
-    print("\n" + "="*80)
-    print("UPGRADED RISK AUDIT & VERIFICATION REPORT")
-    print("="*80)
-    
-    aapl_ret = results['AAPL']['return']
-    msft_trades = results['MSFT']['trades']
-    
-    print(f"[RISK CONTROL VERIFIED - AAPL]: Upgraded from a catastrophic -50.51% blowup to a controlled {aapl_ret:+.2f}% return!")
-    print(f"[RISK CONTROL VERIFIED - MSFT]: Fee churning slashed from 49 trades down to {msft_trades} trades via Volatility Gate!")
-    print("[SUCCESS]: Strict position caps and volatility gates have transformed the system into a robust, institutional-grade engine.")
-    print("="*80)
-
-    # Finalize and Save plot
-    plt.title('Triton Fuser: Upgraded Risk-Managed 5-Stock Portfolio Performance', fontsize=14, fontweight='bold', pad=15)
-    plt.xlabel('HFT Snapshot Steps', fontsize=12)
-    plt.ylabel('Cumulative Return (%)', fontsize=12)
-    plt.grid(True, linestyle=':', alpha=0.6)
-    plt.legend(fontsize=10, loc='upper left')
+    # Save combined plot
+    ax_combined.set_title('Triton Fuser: Upgraded Risk-Managed 5-Stock Portfolio Performance', fontsize=14, fontweight='bold', pad=15)
+    ax_combined.set_xlabel('HFT Snapshot Steps', fontsize=12)
+    ax_combined.set_ylabel('Cumulative Return (%)', fontsize=12)
+    ax_combined.grid(True, linestyle=':', alpha=0.6)
+    ax_combined.legend(fontsize=10, loc='upper left')
     
     save_path = "multi_stock_backtest.png"
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300)
-    print(f"\n[Backtest Graphics] Multi-stock chart saved successfully to '{save_path}'!")
+    fig_combined.tight_layout()
+    fig_combined.savefig(save_path, dpi=300)
+    plt.close(fig_combined)
+    print(f"\n[Backtest Graphics] Combined chart saved successfully to '{save_path}'!")
 
 if __name__ == '__main__':
     run_multi_stock_audit()

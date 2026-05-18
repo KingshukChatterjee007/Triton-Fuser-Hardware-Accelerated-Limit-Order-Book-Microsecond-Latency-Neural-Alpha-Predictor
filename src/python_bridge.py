@@ -5,10 +5,14 @@ import numpy as np
 import struct
 
 class FusedEngineBridge:
-    def __init__(self, dll_path="src/ingestion_engine.dll"):
+    def __init__(self, dll_path=None):
+        if dll_path is None:
+            import sys
+            ext = ".dll" if sys.platform == "win32" else ".so"
+            dll_path = f"src/ingestion_engine{ext}"
         self.dll_path = os.path.abspath(dll_path)
         if not os.path.exists(self.dll_path):
-            raise FileNotFoundError(f"Engine DLL not found at {self.dll_path}.")
+            raise FileNotFoundError(f"Engine library not found at {self.dll_path}. Make sure to compile it for your OS first.")
         
         self.lib = ctypes.CDLL(self.dll_path)
         
@@ -24,7 +28,7 @@ class FusedEngineBridge:
         ]
         self.lib.process_empirical_data.restype = ctypes.c_int
 
-    def run_ingestion(self, tick_file, n_bins=100, bin_width=1000, max_snapshots=1000, ticks_per_snapshot=20):
+    def run_ingestion(self, tick_file, n_bins=100, bin_width=1000, max_snapshots=1000, ticks_per_snapshot=20, silent=False):
         # We need the mid_price to anchor the bins. Let's read the very first tick from the binary file.
         with open(tick_file, 'rb') as f:
             first_tick = f.read(8)
@@ -38,8 +42,9 @@ class FusedEngineBridge:
         buffer_type = ctypes.c_float * (max_snapshots * n_bins)
         snapshot_buffer = buffer_type()
         
-        print(f"Streaming {tick_file} through AVX2 density engine...")
-        print(f"Anchoring mid_price: {mid_price} | Bin Width: {bin_width} | Bins: {n_bins}")
+        if not silent:
+            print(f"Streaming {tick_file} through AVX2 density engine...")
+            print(f"Anchoring mid_price: {mid_price} | Bin Width: {bin_width} | Bins: {n_bins}")
         
         num_snapshots = self.lib.process_empirical_data(
             b_filename, 
@@ -51,7 +56,8 @@ class FusedEngineBridge:
             ticks_per_snapshot
         )
         
-        print(f"Extracted {num_snapshots} spatial density snapshots.")
+        if not silent:
+            print(f"Extracted {num_snapshots} spatial density snapshots.")
         
         if num_snapshots == 0:
             return None, None
@@ -80,7 +86,7 @@ class FusedEngineBridge:
 
 if __name__ == "__main__":
     print("Testing Python-C++ Empirical Density Bridge...")
-    bridge = FusedEngineBridge("src/ingestion_engine.dll")
+    bridge = FusedEngineBridge()
     try:
         tensor_data = bridge.run_ingestion("binance_real_ticks.bin", n_bins=100, bin_width=1000, ticks_per_snapshot=20)
         if tensor_data is not None:

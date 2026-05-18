@@ -11,11 +11,13 @@ def run_end_to_end_pipeline():
     print("="*80)
 
     # 1. Setup paths and check files
-    bin_file = "historical_itch_feed.bin"
+    bin_file = "binance_real_ticks.bin"
     if not os.path.exists(bin_file):
-        print(f"Empirical bin file {bin_file} not found. Creating a synthetic feed...")
-        from scripts.generate_dummy_data import generate_dummy_data
-        generate_dummy_data()
+        print(f"Empirical dataset {bin_file} not found.")
+        print("Bootstrapping real L2 limit order book data from Binance (capturing live for 5 seconds)...")
+        import asyncio
+        from scripts.fetch_binance_l2 import capture_live_book
+        asyncio.run(capture_live_book(5))
     
     # 2. Ingest & Discretize L2 Ticks via C++ DLL
     print("[Ingestion] Loading L2 tick snapshots via C++ AVX2 Engine...")
@@ -24,8 +26,8 @@ def run_end_to_end_pipeline():
     bin_width = 1000
     ticks_per_snapshot = 20
 
-    # Hot-path Zero-Copy Ingestion
-    bridge = FusedEngineBridge("src/ingestion_engine.dll")
+    # Hot-path Zero-Copy Ingestion (using dynamic platform detection)
+    bridge = FusedEngineBridge()
     empirical_data = bridge.run_ingestion(
         bin_file, 
         n_bins=n_bins, 
@@ -138,15 +140,17 @@ def run_end_to_end_pipeline():
     rolling_u = np.array(rolling_u)
     future_returns = np.array(future_returns)
     
-    # Calculate Information Coefficient (IC) and Sign Hit Rate
-    ic = np.corrcoef(rolling_u, future_returns)[0, 1]
-    if np.isnan(ic):
-        ic = 0.1542 # Fallback correlation representing verified empirical tests
+    # Calculate Information Coefficient (IC) and Sign Hit Rate honestly
+    if len(rolling_u) > 1 and np.std(rolling_u) > 0 and np.std(future_returns) > 0:
+        ic = np.corrcoef(rolling_u, future_returns)[0, 1]
+    else:
+        ic = 0.0
         
-    correct_directions = np.sign(rolling_u) == np.sign(future_returns)
-    hit_rate = np.mean(correct_directions) * 100
-    if np.isnan(hit_rate) or hit_rate == 0.0:
-        hit_rate = 68.33 # Fallback directional hit-rate accuracy representing empirical convergence
+    if len(rolling_u) > 0:
+        correct_directions = np.sign(rolling_u) == np.sign(future_returns)
+        hit_rate = np.mean(correct_directions) * 100
+    else:
+        hit_rate = 0.0
     
     print(f"[Alpha Validation] Rolling Indicator Sample Size: {len(rolling_u)} windows")
     print(f"[Alpha Validation] Information Coefficient (IC): {ic:.4f}")
@@ -156,37 +160,34 @@ def run_end_to_end_pipeline():
     else:
         print("[Alpha Validation] WARNING: No significant predictive power detected in this data regime.")
 
-    # 5. Engineering & Performance Audit: End-to-End Latency Measurement (Issue 9)
+    # 5. Engineering & Performance Audit: End-to-End Latency Measurement
     print("\n" + "="*80)
     print("ENGINEERING AUDIT: MICROSECOND-LATENCY HOT-PATH PROFILING")
     print("="*80)
     
-    # We measure end-to-end hot path latency:
-    # Raw tick read -> C++ Ingestion & Price Binning -> Python ctypes memory mapping -> PyTorch Tensor creation -> PINN inference
+    # We measure actual end-to-end hot path latency:
+    # C++ SIMD AVX2 Ingestion -> Ctypes Zero-Copy Mapping -> PyTorch Tensor bridge -> PINN Model Forward Pass
     latencies_ns = []
     
-    # Pre-allocate inputs for model
-    xt_input = torch.zeros((n_bins, 2), dtype=torch.float32)
-    
-    for i in range(100):
+    for i in range(50):
         start_ns = time.perf_counter_ns()
         
-        # 1. Simulate tick arriving (price and volume delta)
-        p = 6502000 + i * 10
-        v = 15
+        # 1 & 2. Ingest and Discretize L2 Ticks via the real compiled C++ DLL (AVX2 parallel gathers)
+        empirical_data_bench = bridge.run_ingestion(
+            bin_file, 
+            n_bins=n_bins, 
+            bin_width=bin_width, 
+            max_snapshots=10,
+            ticks_per_snapshot=20,
+            silent=True
+        )
         
-        # 2. Inbound C++ Ingestion & Binning Simulation
-        bin_idx = int((p - 6500000) / bin_width) + n_bins // 2
-        
-        # 3. Python zero-copy bridge representation
-        if 0 <= bin_idx < n_bins:
-            xt_input[bin_idx, 0] = (bin_idx - n_bins // 2) / (n_bins // 2) # x_norm
-            xt_input[bin_idx, 1] = 0.5                                   # t_norm
-            
-        # 4. Neural Network Inference Prediction Step
-        with torch.no_grad():
-            alpha_out = pinn(xt_input)
-            
+        # 3 & 4. Zero-Copy Tensor Representation & Neural Network Forward Pass
+        if empirical_data_bench is not None:
+            bench_xt = empirical_data_bench[:, :2]
+            with torch.no_grad():
+                alpha_out = pinn(bench_xt)
+                
         end_ns = time.perf_counter_ns()
         latencies_ns.append(end_ns - start_ns)
         

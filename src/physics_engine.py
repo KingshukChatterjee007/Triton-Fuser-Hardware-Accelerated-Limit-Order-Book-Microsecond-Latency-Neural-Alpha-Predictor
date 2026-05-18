@@ -97,8 +97,14 @@ def train_pinn(empirical_data=None, seed=42, verbose=True):
     
     # Load empirical boundary data using native C++ bridge if not provided
     if empirical_data is None:
+        if not os.path.exists("binance_real_ticks.bin"):
+            if verbose:
+                print("Empirical dataset binance_real_ticks.bin not found. Bootstrapping real Binance L2 data...")
+            import asyncio
+            from scripts.fetch_binance_l2 import capture_live_book
+            asyncio.run(capture_live_book(5))
         try:
-            bridge = FusedEngineBridge("src/ingestion_engine.dll")
+            bridge = FusedEngineBridge()
             empirical_data = bridge.run_ingestion("binance_real_ticks.bin", n_bins=100, bin_width=1000, ticks_per_snapshot=20)
         except Exception as e:
             if verbose:
@@ -182,7 +188,11 @@ def run_multi_seed_audit():
     plt.figure(figsize=(10, 6))
     
     for seed in seeds:
-        u, D, loss_history = train_pinn(seed=seed, verbose=True)
+        res = train_pinn(seed=seed, verbose=True)
+        if res is None:
+            print(f"Skipping Seed {seed} due to missing empirical data.")
+            continue
+        u, D, loss_history = res
         # Plot the authentic, smooth 2,000-epoch mathematical convergence curve
         plt.plot(loss_history, label=f"Seed {seed} (u={u:.4f}, D={D:.4f})", linewidth=1.5)
         
