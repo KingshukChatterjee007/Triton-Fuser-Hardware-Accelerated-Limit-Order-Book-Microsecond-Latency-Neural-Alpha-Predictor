@@ -51,6 +51,14 @@ The custom OpenAI Triton kernel ([fused_kernel.py](file:///c:/Users/91704/Triton
 * **Off-line Simulation**: When backtesting over months of historical L2 tick feeds or evaluating cross-sectional signals across multiple tickers, the batch size is extremely large ($B \ge 4096$).
 * **Arithmetic Intensity**: In this regime, the parallel capability of the GPU dominates. The autotuned Triton kernel merges matrix multiplication, bias addition, and a numerically stable Softplus activation (`tl.maximum(0.0, x) + tl.log(1.0 + tl.exp(-tl.abs(x)))`) directly into the SRAM register-tiling stage. This avoids high-bandwidth memory (HBM) write-backs between mathematical operations, reducing execution latency for large batch sizes.
 
+#### Skeptic's Corner: T4 GPU vs. CPU / Integrated Graphics (Iris Xe) Reality Check
+An experienced quantitative developer or low-latency systems engineer will immediately raise a critical objection: **Why use a GPU (such as a Google Colab NVIDIA T4, or even integrated laptop graphics like Intel Iris Xe) to run a small neural network containing only 4,417 parameters?**
+
+In reality:
+* **CPU and Integrated GPU Superiority**: For an MLP model with under ~5,000 weights, executing on a single high-frequency CPU core (or integrated laptop graphics like Intel Iris Xe) will complete the forward pass in under a microsecond—faster, more predictable, and with zero PCIe transfer jitter compared to a discrete GPU.
+* **Triton as a Pedagogical Explorer**: The Triton GPU implementation in this codebase acts as a proof-of-concept and research explorer. It serves to showcase how Triton's SRAM register tiling, block accumulation, and fused Softplus arithmetic are structured under a JIT compiler framework.
+* **The Scaling Threshold**: Triton JIT matrix multiplication kernels only become computationally and latency justified when the channel, feature, or matrix shapes scale up to $M=N=K \ge 1024$ (such as during massive batched simulations, deep cross-sectional factor models, or transformer-based order book dynamics). At that scale, Triton's ability to bypass HBM bandwidth caps provides massive throughput speedups over standard PyTorch CPU/GPU baselines. For this small 4k parameters prototype, standard CPU evaluation is the practical hot-path choice, and the GPU pipeline serves primarily for educational and theoretical exploration.
+
 ---
 
 ## 3. System Architecture
@@ -84,6 +92,12 @@ A C++ utility designed to parse binary L2 tick logs with high throughput.
 * **Memory Mapping**: Uses `MapViewOfFile` (Windows) or `mmap` (Linux) to map tick files directly into the virtual address space. This avoids user-space copy buffers and allows the OS page cache to manage memory staging.
 * **AVX2 SIMD Vectorization**: The binner (`process_empirical_data`) loads 8 tick price/volume updates simultaneously. It uses SIMD register gathers (`_mm256_i32gather_epi32`) and vector float divisions (`_mm256_div_ps`) to bin ticks relative to the mid-price in parallel.
 * **Vectorized Book Updates**: Provides an auxiliary `update_book_simd` function demonstrating how 8 price levels can be loaded, compared to a target price using `_mm256_cmpeq_epi32` registers, and updated without hot-path memory allocations.
+
+#### A Note on Parsing Performance & Methodology
+Claiming high-throughput processing rates (e.g., nanosecond-scale updates or millions of ticks per second) requires rigorous methodological context:
+* **Contiguous Batch Benchmarking**: The measured parsing speed (~14 nanoseconds per message) represents a single-threaded CPU loop reading sequentially from a pre-loaded, contiguous binary tick log via OS-level memory mapping (warm page cache).
+* **Scope Limits**: This benchmark measures pure binned deserialization. It does not represent live network packet arrival, asynchronous socket parsing, thread synchronization, or intrusive queue allocations.
+* **No Advanced Allocation Frictions**: The parser iterates directly over contiguous segments. In a production-grade live feed-handler, thread contention, jitter, intrusive lock-free ring buffers (FIFOs), branch-free comparisons, and cache-hot layouts (such as slab/arena allocators) govern latency. This utility is structured strictly as a high-speed research binner and historical data serializer rather than a zero-jitter live feed adapter.
 
 ### 2. Python-Ctypes Bridge
 **Source Code:** [python_bridge.py](file:///c:/Users/91704/Triton-Fuser-Hardware-Accelerated-Limit-Order-Book-Microsecond-Latency-Neural-Alpha-Predictor/src/python_bridge.py)
