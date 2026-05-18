@@ -1,33 +1,12 @@
-# Flow order
+# Triton Fuser: Hardware-Accelerated Limit Order Book Microsecond-Latency Neural Alpha Predictor
 
-This repository contains the architecture implementation for "Order Flow", an advanced quantitative finance framework modeling liquidity depth as a continuous fluid density field governed by an Advection-Diffusion partial differential equation (PDE).
+This repository contains the architecture implementation for "Triton Fuser", an advanced quantitative finance framework modeling limit order book liquidity depth as a continuous fluid density field governed by an Advection-Diffusion partial differential equation (PDE).
 
 ## Architecture Overview
 
-```text
-[ Live Network Socket (UDP) ] OR [ Binary L3 Replay Feed ]
-                   │
-                   ▼
-┌────────────────────────────────────────────────────────┐
-│ PHASE 1: Low-Latency Ingestion Engine (C++)            │
-│ ── Live Zero-Copy Sockets / Mmap Replay Options        │
-│ ── AVX2 SIMD Level-2 Book State Reconstruction         │
-└──────────────────┬─────────────────────────────────────┘
-                   │
-                   ▼ (Streaming Feature Tensors)
-┌────────────────────────────────────────────────────────┐
-│ PHASE 2: Hydrodynamic Physics Engine                   │
-│ ── Order Book modeled as Fluid Density Field ρ(x,t)    │
-│ ── Advection-Diffusion Boundary Tracking               │
-└──────────────────┬─────────────────────────────────────┘
-                   │
-                   ▼ (SRAM Pre-Cached Spatial Tensors)
-┌────────────────────────────────────────────────────────┐
-│ PHASE 3: Fused Triton / Intel XPU Inference Kernel      │
-│ ── SRAM-Tiled Matrix Multiplication                    │
-│ ── Fused Softplus Physics-Anchor Alpha Prediction      │
-└────────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="architecture_diagram.png" width="100%" alt="Triton Fuser System Architecture Diagram" />
+</p>
 
 ## System Implementation
 
