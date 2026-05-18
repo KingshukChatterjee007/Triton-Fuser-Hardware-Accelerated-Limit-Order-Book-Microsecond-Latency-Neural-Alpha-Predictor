@@ -114,7 +114,7 @@ This matrix highlights why Triton Fuser's C++ AVX2 SIMD direct memory parser and
 ---
 
 
-## 🛠️ Environment Setup & Installation
+## Environment Setup & Installation
 
 ### Prerequisites
 * **Windows 10/11** or **Linux (Ubuntu 20.04+)**
