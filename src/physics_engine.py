@@ -175,25 +175,27 @@ def train_pinn(empirical_data=None, seed=42, verbose=True):
         print(f"Final Loss Breakdown (Seed {seed}) -> PDE Residual: {final_pde:.6f} | Data MSE: {final_data:.6f}")
         print(f"Learned Physics Parameters: u = {model.u.item():.4f}, D = {model.D.item():.4f}")
     
-    return model.u.item(), model.D.item(), final_pde, final_data
+    return model.u.item(), model.D.item(), loss_history
 
 def run_multi_seed_audit():
     seeds = [42, 100, 999]
     plt.figure(figsize=(10, 6))
     
     for seed in seeds:
-        u, D, pde, data = train_pinn(seed=seed, verbose=True)
-        # Mocking history plot for visual inspection
-        plt.plot([pde + 10.0 * data], label=f"Seed {seed} (u={u:.4f}, D={D:.4f})")
+        u, D, loss_history = train_pinn(seed=seed, verbose=True)
+        # Plot the authentic, smooth 2,000-epoch mathematical convergence curve
+        plt.plot(loss_history, label=f"Seed {seed} (u={u:.4f}, D={D:.4f})", linewidth=1.5)
         
     plt.yscale("log")
-    plt.xlabel("Runs")
-    plt.ylabel("Total Loss")
-    plt.title("Hydrodynamic PINN Empirical Convergence Audit")
-    plt.legend()
-    plt.grid(True)
-    plt.savefig("pinn_empirical_loss.png")
-    print("\nLoss curve audit saved to 'pinn_empirical_loss.png'.")
+    plt.xlabel("Epochs", fontsize=11)
+    plt.ylabel("Total Loss (log scale)", fontsize=11)
+    plt.title("Hydrodynamic PINN Empirical Convergence Audit", fontsize=13, fontweight='bold', pad=12)
+    plt.legend(fontsize=10, loc='upper right')
+    plt.grid(True, linestyle=':', alpha=0.6)
+    plt.tight_layout()
+    plt.savefig("pinn_empirical_loss.png", dpi=300)
+    print("\nLoss curve audit saved successfully to 'pinn_empirical_loss.png'.")
 
 if __name__ == "__main__":
     run_multi_seed_audit()
+
