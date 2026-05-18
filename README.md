@@ -6,9 +6,6 @@ $$\frac{\partial \rho}{\partial t} + u \frac{\partial \rho}{\partial x} = D \fra
 
 This repository is designed as a **high-throughput historical research simulator and mathematical explorer** rather than live, production-grade HFT infrastructure. It serves as an experimental bridge between vectorized C++ log-parsing, PyTorch-based Physics-Informed Neural Network (PINN) training, and autotuned OpenAI Triton GPU kernels.
 
-> [!NOTE]
-> **Repository Name Acknowledgment**: The local directory name (`Triton-Fuser-Hardware-Accelerated-Limit-Order-Book-Microsecond-Latency-Neural-Alpha-Predictor`) is a descriptive experimental path. If hosting this repository on GitHub, we highly recommend renaming the remote repository to a clean, standard identifier such as `triton-fuser` or `fluid-lob`.
-
 ---
 
 ## 1. Project Framing & Realistic Scope
