@@ -149,19 +149,21 @@ python -m scripts.end_to_end_pipeline
 PYTHONPATH=src:. python scripts/end_to_end_pipeline.py
 ```
 
-## Academic Ablation Study
+## Academic Ablation Study & Stochastic Seed Audit
 
-To evaluate the mathematical validity of the Physics-Informed neural regularizer, we conducted an out-of-sample (OOS) ablation study on real L2 Binance order books for both BTC/USDT and ETH/USDT:
+To evaluate the mathematical validity of the Physics-Informed neural regularizer, we conducted an out-of-sample (OOS) ablation study across **3 randomized seeds** on real L2 Binance order books and simulated equity ITCH feeds:
 
-| Asset | Model Architecture | OOS Generalization MSE | PDE Residual MSE | Learned Advection (u) | Learned Diffusion (D) |
-|---|---|---|---|---|---|
-| **BTC/USDT** | Baseline MSE (Plain DL) | 0.097848 | N/A | N/A | N/A |
-| **BTC/USDT** | Physics PINN (PDE) | **0.025136** | **0.000996** | 1.03479 | 0.61249 |
-| **ETH/USDT** | Baseline MSE (Plain DL) | 0.029444 | N/A | N/A | N/A |
-| **ETH/USDT** | Physics PINN (PDE) | **0.030153** | **0.002160** | 0.36694 | 0.40637 |
+| Asset | Model Architecture | OOS Density MSE | OOS Directional Hit Rate (%) | PDE Residual MSE | Learned Advection ($u$) | Learned Diffusion ($D$) |
+|---|---|---|---|---|---|---|
+| **BTC/USDT** | Baseline MSE (Plain) | 0.087426 ± 0.0086 | 38.10% ± 0.00% | N/A | N/A | N/A |
+| **BTC/USDT** | Physics PINN (PDE) | **0.025836** ± 0.0007 | **38.10%** ± 0.00% | 0.000806 | 1.2206 | 0.6263 |
+| **ETH/USDT** | Baseline MSE (Plain) | 0.029912 ± 0.0004 | 50.00% ± 0.00% | N/A | N/A | N/A |
+| **ETH/USDT** | Physics PINN (PDE) | **0.028985** ± 0.0003 | **50.00%** ± 0.00% | 0.001647 | 0.6777 | 0.3034 |
+| **AAPL (Sim)** | Baseline MSE (Plain) | 0.040929 ± 0.0059 | 66.67% ± 47.14% | N/A | N/A | N/A |
+| **AAPL (Sim)** | Physics PINN (PDE) | 0.044388 ± 0.0045 | 48.28% ± 40.90% | 0.004687 | 0.1715 | 0.3945 |
 
 > [!NOTE]
-> Physical Anchoring via the Advection-Diffusion loss boundary acts as an effective regularizer, yielding a **74.31% out-of-sample prediction error reduction** on high-liquidity books.
+> Physical Anchoring via the Advection-Diffusion loss boundary acts as an effective regularizer. On high-liquidity books (BTC & ETH), the PINN constraints prevent overfitting to high-frequency microstructural noise, consistently beating or matching baseline reconstruction performance while offering highly robust physical constraints. OOS Density MSE refers to the Mean Squared Error of the discretized spatial order book density field $\rho(x,t)$.
 
 ---
 
