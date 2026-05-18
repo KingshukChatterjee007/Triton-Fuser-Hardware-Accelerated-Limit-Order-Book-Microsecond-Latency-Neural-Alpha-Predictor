@@ -1,185 +1,150 @@
-# Triton Fuser: Hardware-Accelerated Limit Order Book Microsecond-Latency Neural Alpha Predictor
+# Triton Fuser: A GPU-Accelerated Limit Order Book Density Predictor & PINN Solver
 
-This repository contains the architecture implementation for "Triton Fuser", an advanced quantitative finance framework modeling limit order book liquidity depth as a continuous fluid density field governed by an Advection-Diffusion partial differential equation (PDE).
+Triton Fuser is a quantitative research prototype designed to explore the continuum modeling of limit order book (LOB) liquidity depth. Instead of representing the order book as a discrete, high-dimensional list of price and volume levels, this framework models LOB volume density as a continuous spatial-temporal field, $\rho(x, t)$, governed by a 1D Advection-Diffusion partial differential equation (PDE):
 
-## Architecture Overview
+$$\frac{\partial \rho}{\partial t} + u \frac{\partial \rho}{\partial x} = D \frac{\partial^2 \rho}{\partial x^2}$$
 
-<p align="center">
-  <img src="architecture_diagram.png" width="100%" alt="Triton Fuser System Architecture Diagram" />
-</p>
+Here, $x$ represents the price offset relative to the mid-price, $t$ is time, $u$ is the learned advection drift velocity (acting as a proxy for net buy/sell order flow momentum), and $D$ is the learned diffusion coefficient (representing liquidity dispersion and spread relaxation).
 
-## System Implementation
-
-### 1. The Core Pipeline: C++ Low-Latency Engine
-Located in `src/ingestion_engine.cpp`, this C++ component is designed for ultra-fast L2 order book updates leveraging AVX2 `__m256i` registers to avoid cache line bouncing and eliminate memory allocations during hot-path execution. 
-
-**Ingestion Mechanisms:**
-- **Replay Mode (Default):** Memory-maps a file directly into the virtual address space using `MapViewOfFile`. Ideal for high-speed historical backtesting.
-- **Live Mode (`--live`):** Initializes a live UDP multicast Winsock listener to process inbound L3 exchange binaries on-the-fly, bridging the engine from backtesting directly to real-time.
-
-**To compile (Using MSVC Developer Command Prompt on Windows):**
-```bash
-cl.exe /O2 /arch:AVX2 /LD src/ingestion_engine.cpp /Fe:src/ingestion_engine.dll
-```
-
-**Latency Benchmarks (10,000,000 Messages):**
-- **Python Baseline:** `scripts/benchmark_python.py` measures **~637.8 nanoseconds** per message (6.37 seconds total).
-- **C++ SIMD AVX2 Engine (Windows DLL via ctypes):** `src/python_bridge.py` measures **~14.86 nanoseconds** per message (0.148 seconds total).
-- **Speedup:** **43x faster** execution, completely processing and reconstructing 10M L2 states in under 0.15 seconds, and routing them zero-copy directly into PyTorch tensors.
-
-### 2. The Numerical Engine: Hydrodynamic PINN
-Located in `src/physics_engine.py`, the core neural network maps order book states into a continuous fluid equation. It minimizes an Advection-Diffusion loss metric representing the residual equation of structural liquidity advection towards the mid-price paired with stochastic boundary diffusion.
-
-**Training & Numerical Convergence:**
-Executing `python src/physics_engine.py` runs a full training iteration. 
-- **Model Size:** 4,417 trainable weights
-- **Physics Anchors:** Advection (u) = 0.5, Diffusion (D) = 0.1
-- **Epochs:** 1,000
-- **Final PDE Residual Loss:** Converges to **0.000001** 
-
-#### Convergence Proof
-Here is the visual proof of the continuous fluid density field convergence and empirical data loss minimization:
-
-<p align="center">
-  <img src="pinn_loss_curve.png" width="48%" alt="PINN Loss Curve" />
-  <img src="pinn_empirical_loss.png" width="48%" alt="PINN Empirical Loss" />
-</p>
-
-### 3. The Kernel Compilation Step (Phase 3 Complete)
-Located in `src/fused_kernel.py`. Using OpenAI's Triton framework, this kernel bypasses typical PyTorch boundaries. Matrix multiplication is tile-cached directly in SRAM, and a fused Softplus (Math: `tl.maximum(0.0, x) + tl.log(1.0 + tl.exp(-tl.abs(x)))`) ensures positive structural density boundaries within the same hardware execution cycle.
-
-*Status: **Fully Executed, Optimized, & Audited**.*
-The kernel was compiled and profiled on an **NVIDIA T4 GPU** in Google Colab (reproducible via `phase3_triton_colab.ipynb`). 
-
-**T4 GPU Benchmarking Metrics:**
-| Matrix Dimension (M=N=K) | Latency (ms) | Measured Throughput (TFLOPS) | Accelerator Silicon Utilization (%) |
-|:------------------------:|:------------:|:----------------------------:|:----------------------------------:|
-| **256**                  | 0.0570       | 0.5884                       | 7.26%                              |
-| **512**                  | 0.1838       | 1.4601                       | 18.03%                             |
-| **1024**                 | 0.5942       | **3.6139**                   | **44.62%**                         |
-| **2048**                 | 5.4278       | 3.1652                       | 39.08%                             |
-
-By fusing the matrix multiplication and stable Softplus directly into the SRAM register tile store stage, the engine achieves **44.62% physical silicon utilization** of the T4's hardware capabilities, completely bypassing HBM memory round-trip limits.
-
-### 4. Continuous Integration & End-to-End Audit (Phase 4 Complete)
-Phase 4 connects all independent components into a single, unified high-frequency quantitative pipeline:
-1. **The C++ Ingestion Engine** converts raw binary ticks via Live UDP or mmap Replay into aligned density feature fields.
-2. **The Hydrodynamic PINN Engine** consumes the bridge tensors, mapping them directly to continuous spatial boundary values.
-3. **The Triton Fused Inference Kernel** accepts the predicted boundaries, registers them in high-speed SRAM, and executes the final projection under the stable Softplus physical anchor, emitting predictions at true microsecond speeds.
-
-#### End-to-End Pipeline & Performance Audit
-Executing `python scripts/end_to_end_pipeline.py` audits the complete pipeline (Ingestion -> Bridge -> PINN Predictor -> Latency Profile) on real BTC/USDT Level 2 market data captured live from the exchange:
-* **Out-of-Sample (OOS) ML Generalization:** Achieves a highly robust OOS Empirical MSE of **0.0078** on real order flow snapshots, verifying absolute stability without overfitting on unseen data.
-* **Directional Alpha hit rate:** Advection velocity $u(t)$ achieves a highly robust **58.33% Directional Hit Rate** and **-0.6529 Information Coefficient (IC)** predicting future mid-price shifts (completely free of synthetic bias or hardcoded fallbacks).
-* **Genuine End-to-End Latency Profiling:**
-  - **Average Latency:** **2.912 milliseconds** (inclusive of C++ mmap AVX2 parallel gathers, zero-copy ctypes memory mapping, PyTorch tensor conversion, and forward neural prediction pass).
-  - **Warm-start Latency:** **2.555 milliseconds**.
-  - **Peak Throughput Capacity:** **~343 tick predictions per second**.
-
-#### GPU Utilization Analysis (M=N=K=2048)
-At dimension 2048, GPU utilization falls slightly from 44.62% to 39.08%. This minor regression is caused by **shared memory bank conflict overhead and L2 cache thrashing** when working with larger tile submatrices under a static tile size constraint (`BLOCK_M=64, BLOCK_N=64, BLOCK_K=32`). Implementing dynamic block autotuning (`@triton.autotune`) resolves this regression by scaling the tile size to `BLOCK_M=128, BLOCK_N=128` for larger shapes.
+The system integrates high-performance C++ ingestion, a Python-Ctypes data bridge, a Physics-Informed Neural Network (PINN) solver in PyTorch, and a custom JIT-compiled OpenAI Triton GPU kernel for hardware-fused inference.
 
 ---
 
-### 5. High-Frequency Portfolio Backtester & Multi-Stock Audit
-Located in `scripts/multi_stock_backtest.py`. We designed a premium high-frequency backtester and stress-tested the framework against **5 major stocks** under distinct market volatility regimes:
-* **NVDA** (High-Vol Trend Rider)
-* **TSLA** (Extreme-Vol Mean Reverter)
-* **AAPL** (Low-Vol Slow Drift)
-* **MSFT** (Ultra-Low-Vol Trend)
-* **AMZN** (High-Vol Whipsaw / Trend Trap)
+## System Architecture
 
-We enforced institutional-grade backtesting frictions: **0.5 bps maker/taker fees**, **0.1 ticks execution slippage**, and a **1-snapshot execution latency delay** (to simulate network transmission and GPU pipeline processing delay).
-
-#### Upgraded Risk Management Verification
-By implementing strict risk management gates (capping trade exposure to **15% of cash** instead of 95%), we successfully neutralized extreme downside drawdowns by **80% to 85%**:
-* **AAPL Short Blowup Avoided:** Slashed a catastrophic -50.51% leverage blowup down to a highly controlled -8.47%!
-* **MSFT Fee Churn Gate:** Slashed excessive over-trading losses from -1.55% down to a minor -0.25% friction.
-* **AMZN Volatility Harvest:** Harvested positive alpha (+1.05%) under extreme whipsaw conditions.
+The following diagram illustrates the flow of order book tick updates through the system layers:
 
 <p align="center">
-  <img src="multi_stock_backtest.png" width="100%" alt="Triton Fuser 5-Stock Portfolio Performance" />
+  <img src="architecture_diagram.png" width="100%" alt="Triton Fuser Architecture Diagram" />
 </p>
 
-### 6. Institutional Platform & Feed Comparison
-This matrix highlights why Triton Fuser's C++ AVX2 SIMD direct memory parser and custom GPU JIT autotuner achieve an institutional-grade high-frequency edge compared to standard retail and crypto trading applications:
-
-| Metric | Zerodha (Kite API) | Groww (Retail Feed) | Binance (WebSocket L2) | **Triton Fuser ("Mine")** |
-| :--- | :--- | :--- | :--- | :--- |
-| **Data Depth** | **L1/L2 (Throttled):** Top 5 or 20 bids/asks only. | **L1 (Throttled):** Top 5 bids/asks only. | **Deep L2:** Top 100 or 1000 bids/asks. | **Continuous Field:** Entire L2/L3 order book density. |
-| **Feed Update Speed** | **1 second** (throttled). | **1 to 2 seconds** (throttled). | **100 milliseconds** or tick-by-tick. | **Ticks (Real-Time Nanoseconds).** |
-| **Parsing Latency** | **15 - 50 milliseconds** (slow JSON Python). | **50 - 100 milliseconds** (web wrappers). | **2 - 10 milliseconds** (WebSocket TCP). | **14 nanoseconds** (C++ AVX2 SIMD direct memory). |
-| **Predictive Engine** | None (Lagging charts). | None (Lagging indicators). | Static depth charts. | **Advection-Diffusion PDE PINN Solver.** |
+1. **Ingestion Layer (C++)**: Consumes historical binary tick files (or live UDP streams) and performs fast SIMD-accelerated binning into spatial density fields.
+2. **Bridge Layer (Ctypes / Python)**: Maps the raw bin buffers into NumPy and PyTorch tensors with adaptive scaling and liquidity thresholds.
+3. **Modeling Layer (PyTorch PINN)**: Solves the Advection-Diffusion PDE by training a feed-forward network to fit the observed density while regularizing predictions using automatic differentiation residuals.
+4. **Hardware Fusion Layer (OpenAI Triton)**: Evaluates the neural projection layer, bias addition, and Softplus activation directly in a custom JIT-compiled GPU kernel.
 
 ---
 
+## Component Breakdown & Implementation
 
-## Environment Setup & Installation
+### 1. Low-Latency Ingestion Engine
+**Source Code:** [ingestion_engine.cpp](file:///c:/Users/91704/Triton-Fuser-Hardware-Accelerated-Limit-Order-Book-Microsecond-Latency-Neural-Alpha-Predictor/src/ingestion_engine.cpp)
+
+Built in C++ to achieve high performance when processing structural order book data. The engine provides:
+- **Fast Historical Parsing**: Utilizes OS-native memory-mapped files (`mmap` on POSIX systems, `MapViewOfFile` on Windows) to map raw binary tick streams directly into the virtual address space, bypassing standard user-space file buffering.
+- **SIMD Binning**: Groups incoming tick updates (consisting of price and volume deltas) into discrete spatial bins relative to the rolling mid-price. Uses AVX2 register gather instructions (`_mm256_i32gather_epi32`) and vector float divisions (`_mm256_div_ps`) to bin 8 tick updates per register loop.
+- **SIMD Book Updates**: Includes a vectorized function (`update_book_simd`) that loads 8 price levels and volumes into `__m256i` registers, compares them against a target price vector using register masks (`_mm256_cmpeq_epi32`), and executes a zero-allocation hot-path update.
+- **Live Stream Receiver**: Embeds a basic Winsock/BSD UDP multicast socket listener (`run_live_mode`) capable of receiving L2 packet updates in real-time.
+
+### 2. Python-Ctypes Data Bridge
+**Source Code:** [python_bridge.py](file:///c:/Users/91704/Triton-Fuser-Hardware-Accelerated-Limit-Order-Book-Microsecond-Latency-Neural-Alpha-Predictor/src/python_bridge.py)
+
+A wrapper that loads the compiled C++ shared library/DLL using Python's native `ctypes` library.
+- **Zero-Copy Marshalling**: Allocates pre-aligned output float arrays in Python, passing raw C-style pointers directly into the C++ engine to receive binned snapshots. The memory is then wrapped directly as NumPy arrays and PyTorch tensors.
+- **Adaptive Price Binning**: Rather than using static bin limits, it evaluates rolling price spreads in the binary feed to dynamically adjust the bin width parameter. This matches the discretization grid to the volatility regime of the asset.
+- **Liquidity Sparsity Gate**: Monitors the percentage of active, non-zero price bins. If the asset density falls below a defined threshold, the engine disarms/skips processing to avoid over-trading and fee churn in illiquid conditions.
+
+### 3. Physics-Informed Neural Network (PINN)
+**Source Code:** [physics_engine.py](file:///c:/Users/91704/Triton-Fuser-Hardware-Accelerated-Limit-Order-Book-Microsecond-Latency-Neural-Alpha-Predictor/src/physics_engine.py)
+
+Models the order book density field using a Multi-Layer Perceptron (MLP) regularized by continuous fluid equations.
+- **Continuous Field Modeling**: Maps coordinate vectors $[x, t]$ (representing spatial bin distance from mid-price and time snapshot) to the predicted liquidity density $\rho(x, t)$.
+- **Autograd PDE Residual**: Computes the first-order derivatives ($\frac{\partial \rho}{\partial x}$, $\frac{\partial \rho}{\partial t}$) and the second-order spatial derivative ($\frac{\partial^2 \rho}{\partial x^2}$) using PyTorch's automatic differentiation engine (`torch.autograd.grad`).
+- **Learnable Physics**: The advection velocity $u$ and diffusion viscosity raw parameter $D_{raw}$ are implemented as learnable weights (`nn.Parameter`). A `Softplus` mapping enforces the physical constraint $D > 0$.
+- **Joint Loss Function**: The network is trained with a combined loss:
+  $$\mathcal{L} = \mathcal{L}_{\text{data}} + \lambda \mathcal{L}_{\text{PDE}}$$
+  Where $\mathcal{L}_{\text{data}}$ is the Mean Squared Error (MSE) against binned empirical LOB snapshots, and $\mathcal{L}_{\text{PDE}}$ is the mean squared residual of the Advection-Diffusion equation evaluated over collocation points in the coordinate space.
+
+### 4. JIT-Compiled OpenAI Triton GPU Kernel
+**Source Code:** [fused_kernel.py](file:///c:/Users/91704/Triton-Fuser-Hardware-Accelerated-Limit-Order-Book-Microsecond-Latency-Neural-Alpha-Predictor/src/fused_kernel.py)
+
+To optimize model evaluation, the final forward projection layer is implemented as a custom JIT-compiled CUDA kernel using OpenAI's Triton compiler framework.
+- **Operator Fusion**: Fuses matrix multiplication (representing the final weight projection), bias addition, and the structural `Softplus` activation (which enforces positive boundary bounds on predicted density $\rho$) into a single GPU hardware execution loop.
+- **SRAM Tiling & Register Caching**: Tile matrices are loaded, accumulated, and modified directly within high-speed GPU SRAM registers, avoiding intermediate round-trips to the global high-bandwidth memory (HBM).
+- **Numerically Stable Activation**: The fused activation implements a stable Softplus to prevent floating-point infinity overflows:
+  $$\text{Softplus}(x) = \max(0, x) + \ln(1 + e^{-|x|})$$
+- **Autotuning**: Uses `@triton.autotune` to evaluate different tiling sizes (`BLOCK_M`, `BLOCK_N`, `BLOCK_K`), warp counts, and software stages to optimize execution on the target GPU architecture (e.g. NVIDIA T4).
+
+---
+
+## Validation & Evaluation Harnesses
+
+The repository contains several scripts to evaluate different aspects of the pipeline:
+
+1. **Binance Live Stream Scraper ([fetch_binance_l2.py](file:///c:/Users/91704/Triton-Fuser-Hardware-Accelerated-Limit-Order-Book-Microsecond-Latency-Neural-Alpha-Predictor/scripts/fetch_binance_l2.py))**
+   - Connects to the Binance L2 WebSocket diff-depth API, fetches initial REST L2 state snapshots, updates rolling L2 bids/asks, and packages the feed into binary files using C-compatible integer layouts (`struct.pack('ii')`).
+2. **Pipeline Integration & Profiling ([end_to_end_pipeline.py](file:///c:/Users/91704/Triton-Fuser-Hardware-Accelerated-Limit-Order-Book-Microsecond-Latency-Neural-Alpha-Predictor/scripts/end_to_end_pipeline.py))**
+   - Runs a complete, integrated flow: C++ tick ingestion $\rightarrow$ Ctypes marshalling $\rightarrow$ PyTorch PINN joint training (100 epochs) $\rightarrow$ Out-of-Sample (OOS) density prediction validation.
+   - Computes Alpha signal metrics: correlates the learned advection velocity $u$ (fluid center-of-mass drift rate) against future price returns to calculate an Information Coefficient (IC) and directional accuracy.
+   - Measures end-to-end hot path execution latency over 50 iterations.
+3. **Stochastic Bootstrap Ablation Study ([academic_ablation_study.py](file:///c:/Users/91704/Triton-Fuser-Hardware-Accelerated-Limit-Order-Book-Microsecond-Latency-Neural-Alpha-Predictor/scripts/academic_ablation_study.py))**
+   - Compares the Physics-PINN regularized model against a baseline coordinate MLP optimized purely for spatial data MSE.
+   - Implements a **PDE Residual Noise Filter**: uses the local physical residual $|R(x, t)|$ as an indicator check. If the residual exceeds a threshold, the model flags the state as high-entropy non-equilibrium and skips prediction.
+   - Computes directional hit rates and prediction coverage across multiple seeds using a robust 85% statistical bootstrap resampling with replacement to evaluate variance.
+4. **Regime Portfolio Stress Backtester ([multi_stock_backtest.py](file:///c:/Users/91704/Triton-Fuser-Hardware-Accelerated-Limit-Order-Book-Microsecond-Latency-Neural-Alpha-Predictor/scripts/multi_stock_backtest.py))**
+   - Stress-tests trading decisions using the rolling $u$-momentum signal across 5 simulated stock feeds experiencing distinct volatility/drift regimes (NVDA, TSLA, AAPL, MSFT, AMZN).
+   - Incorporates realistic market friction constants: transaction fees (0.5 bps maker/taker), execution delays (simulating latency lags), and dynamic volatility-scaled position sizing.
+
+---
+
+## Honest Technical Limitations & Production Bottlenecks
+
+A realistic engineering review of this research prototype reveals several bottlenecks that must be resolved for production high-frequency deployment:
+
+1. **The Python/Ctypes Marshalling Overhead**
+   - While the compiled C++ AVX2 density engine processes millions of messages at nanosecond speeds, the Python wrapper and `ctypes` serialization introduce significant overhead. Allocating standard Python floats, calling ctypes, and converting buffers to PyTorch tensors takes **~2 to 3 milliseconds** per pass.
+   - **Production Resolution**: For high-frequency execution, Python must be removed from the hot-path. The inference loop must be compiled in C++ using **LibTorch** (the PyTorch C++ library). The C++ ingestion engine can then evaluate the neural network directly inside the memory-mapped threads, reducing end-to-end latency to sub-10 microseconds.
+2. **WSL / OS Triton Requirements**
+   - OpenAI Triton is designed primarily for Linux environments and requires a modern CUDA-compatible GPU. On Windows, Triton kernels cannot be JIT compiled unless run under WSL (Windows Subsystem for Linux) or using unofficial Windows Triton ports. `end_to_end_pipeline.py` handles this with an autoguard check that falls back to standard PyTorch matrix operators when Triton is unavailable.
+3. **Sparsity Constraints in Illiquid Books**
+   - Continuous PDE models assume a dense fluid medium. In illiquid stocks, L2 updates are highly sparse, resulting in many zero-filled density bins. Enforcing a differential advection-diffusion constraint on mostly empty space leads to unstable derivatives and poor convergence. The sparsity gate in the bridge layer is critical to disarm modeling under these regimes.
+
+---
+
+## Environment Setup & Build Guide
 
 ### Prerequisites
-* **Windows 10/11** or **Linux (Ubuntu 20.04+)**
-* **Python 3.10+** (with PyTorch installed)
-* **MSVC Compiler (cl.exe)** on Windows OR **GCC/G++** on Linux
-* **NVIDIA CUDA Toolkit (v11.8+)** (strictly required for Triton JIT compilation)
+- **Compiler**: MSVC (via Developer Command Prompt) on Windows OR GCC/G++ on Linux.
+- **Python**: Version 3.10+ with PyTorch installed.
+- **CUDA Toolkit**: Version 11.8+ (strictly required if running the Triton GPU kernel on Linux).
 
-### Build Instructions
-#### 1. Compile Ingestion Engine DLL/SO
-* **On Windows (MSVC Developer Command Prompt):**
+### 1. Compile the Ingestion Engine
+To build the dynamic shared library:
+- **On Windows (MSVC Developer Command Prompt)**:
   ```bash
   cl.exe /O2 /arch:AVX2 /LD src/ingestion_engine.cpp /Fe:src/ingestion_engine.dll
   ```
-* **On Linux (GCC):**
+- **On Linux (GCC)**:
   ```bash
   g++ -O3 -mavx2 -shared -fPIC src/ingestion_engine.cpp -o src/ingestion_engine.dll
   ```
 
-#### 2. Install Python Dependencies
+### 2. Install Python Dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-#### 3. Run Pipeline Validation
-```bash
-# Set PYTHONPATH to map peer imports
-# On Windows PowerShell:
-$env:PYTHONPATH="src;."
-python -m scripts.end_to_end_pipeline
+### 3. Run Pipeline Validation
+To execute the complete ingestion, training, evaluation, and latency-profiling loop:
+- **On Windows PowerShell**:
+  ```powershell
+  $env:PYTHONPATH="src;."
+  python -m scripts.end_to_end_pipeline
+  ```
+- **On Linux / WSL Bash**:
+  ```bash
+  PYTHONPATH=src:. python scripts/end_to_end_pipeline.py
+  ```
 
-# On Linux/macOS Bash:
-PYTHONPATH=src:. python scripts/end_to_end_pipeline.py
-```
-
-## Academic Ablation Study & Stochastic Bootstrap Audit
-
-To evaluate the mathematical validity of the Physics-Informed neural regularizer, we conducted an out-of-sample (OOS) ablation study across **3 randomized seeds** on real L2 Binance order books, evaluating the impact of real-time **PDE Residual Noise Filtering** under a robust **85% bootstrap resampling** with replacement:
-
-| Asset | Model Architecture | OOS Density MSE | OOS Directional Hit Rate | Prediction Coverage | PDE Residual MSE |
-|---|---|---|---|---|---|
-| **BTC/USDT** | Baseline MSE | 0.087426 ± 0.0086 | 44.66% ± 10.75% | **100.0%** ± 0.00% | N/A |
-| **BTC/USDT** | Physics PINN (Filt) | **0.025836** ± 0.0007 | **58.03%** ± 11.75% | 48.9% ± 4.90% | **0.000806** |
-| **ETH/USDT** | Baseline MSE | 0.029912 ± 0.0004 | 47.84% ± 0.76% | **100.0%** ± 0.00% | N/A |
-| **ETH/USDT** | Physics PINN (Filt) | **0.028985** ± 0.0003 | **52.56%** ± 0.54% | 43.1% ± 1.10% | **0.001647** |
-
-> [!NOTE]
-> Physical Anchoring via the Advection-Diffusion loss boundary acts as an exceptionally powerful **real-time noise filter**. Enforcing the continuous PDE differential geometry allows the system to evaluate the local physical residual $R(x,t)$. By filtering out chaotic, non-equilibrium states (high residual, $|R| > 0.0022$), the Physics-PINN isolates price-forming ticks, consistently boosting out-of-sample directional hit rates (e.g. from 44.66% to 58.03% on BTC/USDT) while maintaining realistic, seed-sensitive standard deviations via 85% bootstrap evaluation. OOS Density MSE refers to the Mean Squared Error of the discretized spatial order book density field $\rho(x,t)$.
-
----
-
-## Latency Bottleneck & Systemic Profiling
-
-The end-to-end latency of the interpreted Python pipeline is **608.9 microseconds** under warm cache. Here is the systemic microsecond breakdown of the execution path:
-
-```
-[Incoming L2 Tick]
-      │
-      ├── C++ AVX2 SIMD Ingestion:       0.015 microseconds (0.00%)
-      │
-      ├── Ctypes Memory Serialization: 420.500 microseconds (69.05%)  <── Systemic Bottleneck!
-      │
-      ├── PyTorch Tensor Allocation:   150.400 microseconds (24.70%)
-      │
-      └── Triton Fused GPU Inference:   38.000 microseconds (6.25%)
-```
-
-### Production Microsecond Optimization Path
-In a production high-frequency trading (HFT) environment, Python’s interpreted ctypes wrapper is bypassed entirely. The end-to-end hot path is compiled natively via **LibTorch (C++ PyTorch API)**, embedding the forward model directly inside the C++ ingestion engine's memory-mapped segment. This eliminates the ctypes marshalling and Python VM overhead, compressing execution latency to **sub-10 microseconds** for live production.
+### 4. Run Ablation and Backtest Audits
+To execute the peer-review bootstrap ablation study and the multi-regime backtester:
+- **On Windows PowerShell**:
+  ```powershell
+  python -m scripts.academic_ablation_study
+  python -m scripts.multi_stock_backtest
+  ```
+- **On Linux / WSL Bash**:
+  ```bash
+  PYTHONPATH=src:. python scripts/academic_ablation_study.py
+  PYTHONPATH=src:. python scripts/multi_stock_backtest.py
+  ```
