@@ -1,6 +1,6 @@
-# Anti-Gravity: Hydrodynamic Order Flow 🌊⚡
+# Flow order
 
-This repository contains the architecture implementation for "Anti-Gravity: Hydrodynamic Order Flow", an advanced quantitative finance framework modeling liquidity depth as a continuous fluid density field governed by an Advection-Diffusion partial differential equation (PDE).
+This repository contains the architecture implementation for "Order Flow", an advanced quantitative finance framework modeling liquidity depth as a continuous fluid density field governed by an Advection-Diffusion partial differential equation (PDE).
 
 ## Architecture Overview
 
