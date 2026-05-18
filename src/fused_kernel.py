@@ -75,7 +75,7 @@ def run_fused_alpha_layer(x, w, b):
         x, w, b, out,
         M, N, K,
         x.stride(0), x.stride(1),
-        w.stride(0), w.stride(1),
+        w.stride(1), w.stride(0),
         out.stride(0), out.stride(1),
         BLOCK_M=32, BLOCK_N=32, BLOCK_K=32
     )
