@@ -118,7 +118,7 @@ if __name__ == "__main__":
                 line_vals=['triton', 'torch'],
                 line_names=['Triton', 'Torch'],
                 styles=[('blue', '-'), ('green', '-')],
-                ylabel='GB/s',
+                ylabel='TFLOPS',
                 plot_name='matmul-performance',
                 args={}
             )
@@ -135,9 +135,9 @@ if __name__ == "__main__":
             if provider == 'triton':
                 ms, min_ms, max_ms = triton.testing.do_bench(lambda: run_fused_alpha_layer(x, w, b), quantiles=quantiles)
             
-            # Simple GB/s calculation
-            gbps = lambda ms: 2 * M * N * K * 1e-9 / (ms * 1e-3)
-            return gbps(ms), gbps(max_ms), gbps(min_ms)
+            # Compute Throughput in TFLOPS (2 * M * N * K floating point ops per matmul)
+            tflops = lambda ms: 2 * M * N * K * 1e-9 / (ms * 1e-3)
+            return tflops(ms), tflops(max_ms), tflops(min_ms)
         
         benchmark.run(print_data=True, show_plots=False)
         

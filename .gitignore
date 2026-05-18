@@ -1,0 +1,13 @@
+# Compiled C++ build artifacts
+*.obj
+ingestion_engine.obj
+
+# Python bytecode caches
+__pycache__/
+*.pyc
+
+# Local binary market data feeds (extremely large, should not be tracked)
+*.bin
+binance_real_ticks.bin
+feed_*.bin
+historical_itch_feed.bin
